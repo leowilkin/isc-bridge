@@ -1,0 +1,12 @@
+services:
+  ics_bridge:
+    build: .
+    container_name: ics-bridge
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./credentials:/app/credentials:ro
