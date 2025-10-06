@@ -4,6 +4,6 @@ google-auth-oauthlib==1.2.1
 icalevents==0.1.28
 pytz==2024.1
 python-dateutil==2.9.0.post0
-requests==2.32.4
+requests==2.32.3
 flask==3.0.3
 waitress==3.0.2
