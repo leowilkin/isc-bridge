@@ -7,6 +7,6 @@ services:
       - .env
     volumes:
       - ./data:/app/data
-      - ./credentials:/app/credentials:ro
+      - ./credentials:/app/credentials
     expose:
       - 8080
