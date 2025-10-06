@@ -55,8 +55,15 @@ def run_device_flow() -> Credentials:
     client_id = config["client_id"]
     client_secret = config.get("client_secret", "")
     
+    print(f"[auth] Using client_id: {client_id[:20]}...")
+    print(f"[auth] Requesting device code with scopes: {SCOPES}")
+    
     payload = {"client_id": client_id, "scope": " ".join(SCOPES)}
     resp = requests.post("https://oauth2.googleapis.com/device/code", data=payload, timeout=30)
+    
+    if resp.status_code != 200:
+        print(f"[auth] Error response: {resp.status_code} - {resp.text}")
+    
     resp.raise_for_status()
     device_data = resp.json()
     
