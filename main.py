@@ -172,12 +172,36 @@ def normalize_event_times(ics_ev) -> Tuple[datetime, datetime, bool]:
 def fetch_ics_window(start: datetime, end: datetime):
     return ical_fetch_events(url=ICS_URL, start=start.date(), end=end.date())
 
+def execute_with_backoff(request, operation: str, max_retries: int = 5):
+    """Execute a Google API request with exponential backoff on rate limit errors."""
+    for attempt in range(max_retries):
+        try:
+            result = request.execute()
+            return result
+        except HttpError as e:
+            # Handle both 429 (Too Many Requests) and 403 (rateLimitExceeded)
+            is_rate_limit = (
+                e.resp.status == 429 or 
+                (e.resp.status == 403 and 'rateLimitExceeded' in str(e))
+            )
+            
+            if is_rate_limit and attempt < max_retries - 1:
+                # Exponential backoff: 2, 4, 8, 16 seconds
+                wait_time = 2 ** (attempt + 1)
+                retry_after = int(e.resp.get('retry-after', wait_time))
+                wait = max(wait_time, retry_after)
+                print(f"[warn] Rate limit hit during {operation} (attempt {attempt + 1}/{max_retries}), waiting {wait}s")
+                time.sleep(wait)
+                continue
+            raise
+    raise RuntimeError(f"Failed {operation} after {max_retries} retries")
+
 def list_existing_mirrors(service, time_min: str, time_max: str) -> List[Dict]:
     items = []
     page_token = None
     while True:
-        try:
-            resp = service.events().list(
+        resp = execute_with_backoff(
+            service.events().list(
                 calendarId=GOOGLE_CALENDAR_ID,
                 privateExtendedProperty=["ics_bridge=true"],
                 timeMin=time_min,
@@ -187,19 +211,14 @@ def list_existing_mirrors(service, time_min: str, time_max: str) -> List[Dict]:
                 pageToken=page_token,
                 showDeleted=False,
                 orderBy="startTime",
-            ).execute()
-            items.extend(resp.get("items", []))
-            page_token = resp.get("nextPageToken")
-            if not page_token:
-                break
-            time.sleep(uniform(0.1, 0.3))
-        except HttpError as e:
-            if e.resp.status == 429:
-                retry_after = int(e.resp.get('retry-after', 60))
-                print(f"[warn] Rate limited, waiting {retry_after}s")
-                time.sleep(retry_after)
-                continue
-            raise
+            ),
+            "list events"
+        )
+        items.extend(resp.get("items", []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+        time.sleep(uniform(0.2, 0.5))
     return items
 
 def gcal_event_from_ics(ics_ev, key: str, start_dt: datetime, end_dt: datetime, all_day: bool) -> Dict:
@@ -325,35 +344,31 @@ def sync_once():
             }
             if not compare_relevant(body, projection):
                 try:
-                    service.events().patch(
-                        calendarId=GOOGLE_CALENDAR_ID,
-                        eventId=ge["id"],
-                        body=body,
-                    ).execute()
+                    execute_with_backoff(
+                        service.events().patch(
+                            calendarId=GOOGLE_CALENDAR_ID,
+                            eventId=ge["id"],
+                            body=body,
+                        ),
+                        f"update event {k}"
+                    )
                     updated += 1
-                    time.sleep(uniform(0.05, 0.15))
-                except HttpError as e:
-                    if e.resp.status == 429:
-                        retry_after = int(e.resp.get('retry-after', 60))
-                        print(f"[warn] Rate limited, waiting {retry_after}s")
-                        time.sleep(retry_after)
-                    else:
-                        print(f"[warn] update failed for {k}: {e}")
+                    time.sleep(uniform(0.2, 0.5))
+                except Exception as e:
+                    print(f"[warn] update failed for {k}: {e}")
         else:
             try:
-                service.events().insert(
-                    calendarId=GOOGLE_CALENDAR_ID,
-                    body=body
-                ).execute()
+                execute_with_backoff(
+                    service.events().insert(
+                        calendarId=GOOGLE_CALENDAR_ID,
+                        body=body
+                    ),
+                    f"create event {k}"
+                )
                 created += 1
-                time.sleep(uniform(0.05, 0.15))
-            except HttpError as e:
-                if e.resp.status == 429:
-                    retry_after = int(e.resp.get('retry-after', 60))
-                    print(f"[warn] Rate limited, waiting {retry_after}s")
-                    time.sleep(retry_after)
-                else:
-                    print(f"[warn] create failed for {k}: {e}")
+                time.sleep(uniform(0.2, 0.5))
+            except Exception as e:
+                print(f"[warn] create failed for {k}: {e}")
 
     # Deletions
     deleted = 0
@@ -361,19 +376,17 @@ def sync_once():
     for k, ge in existing_by_key.items():
         if k not in current_keys:
             try:
-                service.events().delete(
-                    calendarId=GOOGLE_CALENDAR_ID,
-                    eventId=ge["id"]
-                ).execute()
+                execute_with_backoff(
+                    service.events().delete(
+                        calendarId=GOOGLE_CALENDAR_ID,
+                        eventId=ge["id"]
+                    ),
+                    f"delete event {k}"
+                )
                 deleted += 1
-                time.sleep(uniform(0.05, 0.15))
-            except HttpError as e:
-                if e.resp.status == 429:
-                    retry_after = int(e.resp.get('retry-after', 60))
-                    print(f"[warn] Rate limited, waiting {retry_after}s")
-                    time.sleep(retry_after)
-                else:
-                    print(f"[warn] delete failed for {k}: {e}")
+                time.sleep(uniform(0.2, 0.5))
+            except Exception as e:
+                print(f"[warn] delete failed for {k}: {e}")
 
     print(f"[sync] created={created} updated={updated} deleted={deleted} in_window={len(wanted)}")
     return created, updated, deleted
