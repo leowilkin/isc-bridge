@@ -225,9 +225,14 @@ HTML_TEMPLATE = """
     <div class="container">
         <h1>🔄 ICS Bridge Admin</h1>
         
-        <button class="sync-button" onclick="runSync()" id="syncBtn">
-            Manual Sync Now
-        </button>
+        <div style="display: flex; gap: 10px; margin-bottom: 30px;">
+            <button class="sync-button" onclick="runSync()" id="syncBtn" style="flex: 1; margin: 0;">
+                Manual Sync Now
+            </button>
+            <button class="sync-button" onclick="logout()" style="background: #64748b; flex: 0 0 auto; margin: 0;">
+                Logout
+            </button>
+        </div>
         
         <div class="status" id="status"></div>
         
@@ -250,6 +255,10 @@ HTML_TEMPLATE = """
     </div>
     
     <script>
+        function logout() {
+            window.location.href = '/logout';
+        }
+        
         function formatDate(isoStr) {
             const d = new Date(isoStr);
             return d.toLocaleString();
@@ -319,15 +328,33 @@ HTML_TEMPLATE = """
 </html>
 """
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        password = request.form.get("password")
+        if password == ADMIN_PASSWORD:
+            session['authenticated'] = True
+            return redirect(url_for('index'))
+        return render_template_string(LOGIN_TEMPLATE, error="Invalid password")
+    return render_template_string(LOGIN_TEMPLATE)
+
+@app.route("/logout")
+def logout():
+    session.pop('authenticated', None)
+    return redirect(url_for('login'))
+
 @app.route("/")
+@require_auth
 def index():
     return render_template_string(HTML_TEMPLATE)
 
 @app.route("/api/history")
+@require_auth
 def get_history():
     return jsonify(load_history())
 
 @app.route("/api/sync", methods=["POST"])
+@require_auth
 def trigger_sync():
     if not sync_lock.acquire(blocking=False):
         return jsonify({"success": False, "error": "Sync already in progress"}), 409

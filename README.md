@@ -18,6 +18,8 @@ Pulls an Outlook iCal feed and mirrors events into your Google Calendar so your 
 3. Copy `.env.example` to `.env` and edit:
    - `ICS_URL` - your Outlook ICS link
    - `GOOGLE_CALENDAR_ID` - usually `primary` or a specific calendar id like you@example.com
+   - `ADMIN_PASSWORD` - password for the admin panel (default: `admin`)
+   - `SECRET_KEY` - random secret for session encryption (generate with `openssl rand -hex 32`)
 4. Build and run:
 
    ```bash
