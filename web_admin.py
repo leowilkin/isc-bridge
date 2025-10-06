@@ -328,6 +328,10 @@ HTML_TEMPLATE = """
 </html>
 """
 
+@app.route("/health")
+def health():
+    return jsonify({"status": "healthy"}), 200
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
