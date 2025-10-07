@@ -391,10 +391,23 @@ def sync_once():
     print(f"[sync] created={created} updated={updated} deleted={deleted} in_window={len(wanted)}")
     return created, updated, deleted
 
+def record_sync_result(created: int, updated: int, deleted: int, error: Exception = None):
+    """Save sync result to history for web dashboard."""
+    try:
+        from web_admin import add_sync_record
+        if error:
+            add_sync_record(False, error_msg=str(error))
+        else:
+            add_sync_record(True, created, updated, deleted)
+    except Exception:
+        pass  # Web admin might not be running
+
 if __name__ == "__main__":
     while True:
         try:
-            sync_once()
+            created, updated, deleted = sync_once()
+            record_sync_result(created, updated, deleted)
         except Exception as e:
             print(f"[error] {e}")
+            record_sync_result(0, 0, 0, e)
         time.sleep(POLL_SECONDS)
