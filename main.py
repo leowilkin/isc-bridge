@@ -290,15 +290,17 @@ def compare_relevant(a: Dict, b: Dict) -> bool:
 def sync_once():
     service = get_gcal_service()
 
-    window_start = now_utc() - timedelta(days=LOOKBACK_DAYS)
+    # Only look forward to avoid deleting/recreating past events that dropped from ICS feed
+    window_start = now_utc()
     window_end = now_utc() + timedelta(days=LOOKAHEAD_DAYS)
     time_min = iso(window_start)
     time_max = iso(window_end)
 
     print(f"[sync] window {time_min} to {time_max}")
 
-    # Fetch ICS events
-    ics_events = fetch_ics_window(window_start, window_end)
+    # Fetch ICS events (add small lookback for events starting soon)
+    ics_fetch_start = window_start - timedelta(days=LOOKBACK_DAYS)
+    ics_events = fetch_ics_window(ics_fetch_start, window_end)
     wanted: Dict[str, Dict] = {}
     for ev in ics_events:
         status = (getattr(ev, "status", "") or "").upper()
@@ -310,6 +312,12 @@ def sync_once():
         except Exception as exc:
             print(f"[warn] skipping event without usable times ({uid}): {exc}")
             continue
+        
+        # Only sync events that end at or after window_start (filter out past events)
+        event_end = end_dt if isinstance(end_dt, datetime) else datetime.combine(end_dt, datetime.min.time(), tzinfo=timezone.utc)
+        if event_end < window_start:
+            continue
+            
         key = event_key(uid, start_dt.date() if all_day else start_dt, all_day)
         wanted[key] = gcal_event_from_ics(ev, key, start_dt, end_dt, all_day)
 
