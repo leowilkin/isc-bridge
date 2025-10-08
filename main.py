@@ -270,6 +270,15 @@ def gcal_event_from_ics(ics_ev, key: str, start_dt: datetime, end_dt: datetime, 
             "url": ICS_URL
         },
     }
+    
+    # Add organizer if present
+    organizer = getattr(ics_ev, "organizer", None)
+    if organizer:
+        # organizer can be a string like "mailto:person@example.com" or just email
+        email = organizer.replace("mailto:", "").strip() if isinstance(organizer, str) else None
+        if email and "@" in email:
+            body["organizer"] = {"email": email, "displayName": email.split("@")[0]}
+    
     return body
 
 def compare_relevant(a: Dict, b: Dict) -> bool:
