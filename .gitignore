@@ -23,3 +23,7 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Virtualenv
+.venv/
+.cache/

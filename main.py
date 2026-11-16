@@ -25,6 +25,7 @@ DATA_DIR = os.path.abspath("./data")
 CREDS_DIR = os.path.abspath("./credentials")
 TOKEN_PATH = os.path.join(DATA_DIR, "token.json")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
+BLOCKED_RANGES_PATH = os.path.join(DATA_DIR, "blocked_ranges.json")
 CREDENTIALS_PATH = os.path.join(CREDS_DIR, "credentials.json")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -44,6 +45,23 @@ def save_state(state):
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(STATE_PATH, "w") as f:
         json.dump(state, f)
+
+def load_blocked_ranges() -> List[Dict]:
+    if os.path.exists(BLOCKED_RANGES_PATH):
+        with open(BLOCKED_RANGES_PATH, "r") as f:
+            return json.load(f)
+    return []
+
+def is_event_blocked(start_dt: datetime, end_dt: datetime, blocked_ranges: List[Dict]) -> bool:
+    event_start = start_dt.date() if isinstance(start_dt, datetime) else start_dt
+    event_end = end_dt.date() if isinstance(end_dt, datetime) else end_dt
+    
+    for br in blocked_ranges:
+        block_start = date.fromisoformat(br["start"])
+        block_end = date.fromisoformat(br["end"])
+        if event_start <= block_end and event_end >= block_start:
+            return True
+    return False
 
 def run_device_flow() -> Credentials:
     with open(CREDENTIALS_PATH, "r") as f:
@@ -281,18 +299,22 @@ def gcal_event_from_ics(ics_ev, key: str, start_dt: datetime, end_dt: datetime, 
     
     return body
 
+def normalize_time_field(field: Dict) -> str:
+    # Google returns "...Z" or a calendar-local offset; we write "+00:00". Compare as UTC instants.
+    if field.get("dateTime"):
+        return iso(datetime.fromisoformat(field["dateTime"].replace("Z", "+00:00")))
+    return field.get("date") or ""
+
 def compare_relevant(a: Dict, b: Dict) -> bool:
-    fields = ["summary", "location", "description", "visibility", "transparency"]
-    times = ["start", "end"]
+    fields = ["summary", "location", "description", "visibility"]
     for f in fields:
         if (a.get(f) or "") != (b.get(f) or ""):
             return False
-    for t in times:
-        a_time = a.get(t, {})
-        b_time = b.get(t, {})
-        a_value = a_time.get("dateTime") or a_time.get("date") or ""
-        b_value = b_time.get("dateTime") or b_time.get("date") or ""
-        if a_value != b_value:
+    # Google omits transparency when it's the default ("opaque")
+    if (a.get("transparency") or "opaque") != (b.get("transparency") or "opaque"):
+        return False
+    for t in ["start", "end"]:
+        if normalize_time_field(a.get(t, {})) != normalize_time_field(b.get(t, {})):
             return False
     return True
 
@@ -307,6 +329,9 @@ def sync_once():
 
     print(f"[sync] window {time_min} to {time_max}")
 
+    # Load blocked date ranges
+    blocked_ranges = load_blocked_ranges()
+    
     # Fetch ICS events (add small lookback for events starting soon)
     ics_fetch_start = window_start - timedelta(days=LOOKBACK_DAYS)
     ics_events = fetch_ics_window(ics_fetch_start, window_end)
@@ -325,6 +350,10 @@ def sync_once():
         # Only sync events that end at or after window_start (filter out past events)
         event_end = end_dt if isinstance(end_dt, datetime) else datetime.combine(end_dt, datetime.min.time(), tzinfo=timezone.utc)
         if event_end < window_start:
+            continue
+        
+        # Skip events in blocked date ranges
+        if is_event_blocked(start_dt, end_dt, blocked_ranges):
             continue
             
         key = event_key(uid, start_dt.date() if all_day else start_dt, all_day)

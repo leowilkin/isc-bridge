@@ -8,6 +8,7 @@ from main import sync_once
 
 DATA_DIR = os.path.abspath("./data")
 HISTORY_PATH = os.path.join(DATA_DIR, "sync_history.json")
+BLOCKED_RANGES_PATH = os.path.join(DATA_DIR, "blocked_ranges.json")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 
 app = Flask(__name__)
@@ -32,6 +33,17 @@ def save_history(history):
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(HISTORY_PATH, "w") as f:
         json.dump(history[-100:], f, indent=2)
+
+def load_blocked_ranges():
+    if os.path.exists(BLOCKED_RANGES_PATH):
+        with open(BLOCKED_RANGES_PATH, "r") as f:
+            return json.load(f)
+    return []
+
+def save_blocked_ranges(ranges):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BLOCKED_RANGES_PATH, "w") as f:
+        json.dump(ranges, f, indent=2)
 
 def add_sync_record(success, created=0, updated=0, deleted=0, error_msg=None):
     history = load_history()
@@ -236,6 +248,29 @@ HTML_TEMPLATE = """
         
         <div class="status" id="status"></div>
         
+        <h2 style="margin-bottom: 16px;">Blocked Date Ranges</h2>
+        <p style="color: #94a3b8; margin-bottom: 16px; font-size: 14px;">Events within these date ranges will not be synced from the ICS feed.</p>
+        <div style="display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap;">
+            <input type="date" id="blockStart" style="padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0;">
+            <span style="color: #64748b; align-self: center;">to</span>
+            <input type="date" id="blockEnd" style="padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0;">
+            <input type="text" id="blockReason" placeholder="Reason (optional)" style="padding: 10px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; flex: 1; min-width: 150px;">
+            <button onclick="addBlockedRange()" style="background: #ef4444; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer;">Block Range</button>
+        </div>
+        <table style="margin-bottom: 30px;">
+            <thead>
+                <tr>
+                    <th>Start Date</th>
+                    <th>End Date</th>
+                    <th>Reason</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody id="blockedBody">
+                <tr><td colspan="4" style="text-align: center;">Loading...</td></tr>
+            </tbody>
+        </table>
+        
         <h2 style="margin-bottom: 16px;">Sync History</h2>
         <table id="historyTable">
             <thead>
@@ -321,6 +356,62 @@ HTML_TEMPLATE = """
                 });
         }
         
+        function updateBlockedRanges() {
+            fetch('/api/blocked-ranges')
+                .then(r => r.json())
+                .then(data => {
+                    const tbody = document.getElementById('blockedBody');
+                    if (data.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #64748b;">No blocked ranges</td></tr>';
+                        return;
+                    }
+                    tbody.innerHTML = data.map((range, idx) => `
+                        <tr>
+                            <td>${range.start}</td>
+                            <td>${range.end}</td>
+                            <td class="stat">${range.reason || '—'}</td>
+                            <td>
+                                <button onclick="deleteBlockedRange(${idx})" style="background: #dc2626; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">Remove</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                });
+        }
+        
+        function addBlockedRange() {
+            const start = document.getElementById('blockStart').value;
+            const end = document.getElementById('blockEnd').value;
+            const reason = document.getElementById('blockReason').value;
+            
+            if (!start || !end) {
+                alert('Please select both start and end dates');
+                return;
+            }
+            if (start > end) {
+                alert('Start date must be before or equal to end date');
+                return;
+            }
+            
+            fetch('/api/blocked-ranges', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({start, end, reason})
+            })
+            .then(r => r.json())
+            .then(() => {
+                document.getElementById('blockStart').value = '';
+                document.getElementById('blockEnd').value = '';
+                document.getElementById('blockReason').value = '';
+                updateBlockedRanges();
+            });
+        }
+        
+        function deleteBlockedRange(idx) {
+            fetch('/api/blocked-ranges/' + idx, {method: 'DELETE'})
+                .then(() => updateBlockedRanges());
+        }
+        
+        updateBlockedRanges();
         updateHistory();
         setInterval(updateHistory, 10000);
     </script>
@@ -356,6 +447,37 @@ def index():
 @require_auth
 def get_history():
     return jsonify(load_history())
+
+@app.route("/api/blocked-ranges")
+@require_auth
+def get_blocked_ranges():
+    return jsonify(load_blocked_ranges())
+
+@app.route("/api/blocked-ranges", methods=["POST"])
+@require_auth
+def add_blocked_range():
+    data = request.get_json()
+    start = data.get("start")
+    end = data.get("end")
+    reason = data.get("reason", "")
+    
+    if not start or not end:
+        return jsonify({"error": "start and end required"}), 400
+    
+    ranges = load_blocked_ranges()
+    ranges.append({"start": start, "end": end, "reason": reason})
+    ranges.sort(key=lambda r: r["start"])
+    save_blocked_ranges(ranges)
+    return jsonify({"success": True})
+
+@app.route("/api/blocked-ranges/<int:idx>", methods=["DELETE"])
+@require_auth
+def delete_blocked_range(idx):
+    ranges = load_blocked_ranges()
+    if 0 <= idx < len(ranges):
+        ranges.pop(idx)
+        save_blocked_ranges(ranges)
+    return jsonify({"success": True})
 
 @app.route("/api/sync", methods=["POST"])
 @require_auth
